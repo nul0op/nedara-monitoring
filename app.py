@@ -41,10 +41,17 @@ config.read('config.ini')
 DEFAULT_ENV = config['environments']['default_env']
 REFRESH_RATE = float(config['general']['refresh_rate'])
 
+with open('version.json') as _vf:
+    VERSION = json.load(_vf)['version']
+
 app = Flask(__name__)
 app.json_encoder = CustomJSONEncoder
 app.config['SECRET_KEY'] = config['general'].get('secret_key', 'nedara-change-me')
 socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*", max_decode_packets=50)
+
+@app.context_processor
+def inject_version():
+    return {'version': VERSION}
 
 DATABASE = 'nedara_monitoring.db'
 SCHEMA = """
