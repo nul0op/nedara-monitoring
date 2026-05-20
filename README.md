@@ -35,8 +35,16 @@ Nedara Monitoring is an open-source web application that collects metrics from y
   - Pause/Resume per chart
   - Fullscreen expand for each chart and panel
 - **Theme** — Auto / Light / Dark, respects OS preference, persists across sessions
-- **Email notifications** via SMTP — sent when a server or PostgreSQL becomes unreachable (maximum one email per 15 minutes per incident)
-- **Mail indicator** in the UI when email notifications are configured
+- **Email notifications** via SMTP
+  - Sent when a server, PostgreSQL, or web application becomes unreachable
+  - Maximum one email per 15 minutes per incident (throttle)
+  - Per-environment toggle — disable alerts on staging while keeping them on production
+  - Configurable alert delay — wait N minutes before sending, to avoid alerts for transient outages
+  - Mail indicator in the UI when email notifications are configured
+- **Web admin interface** at `/admin` — configure the application from the browser without touching `config.ini`
+  - Password-protected (Werkzeug password hash stored in `config.ini`)
+  - First-time setup wizard: set the password directly in the browser on first access
+  - Can be disabled entirely by setting `admin_enabled = 0`
 
 ## Requirements
 
@@ -206,11 +214,12 @@ server {
 }
 ```
 
-> If you use self-signed certificates, set `verify = False` is already the default for the web health check in `check_web_status`. For Let's Encrypt or a trusted CA, you can remove that bypass in `app.py`.
+> If you use self-signed certificates, `verify = False` is already the default for the web health check in `check_web_status`. For Let's Encrypt or a trusted CA, you can remove that bypass in `app.py`.
 
 ## Configuration
 
 The application is configured via `config.ini`. Copy `config.ini.example` as a starting point.
+Alternatively, enable the [Admin interface](#admin-interface) to configure everything from the browser.
 
 ### `[general]`
 
@@ -223,8 +232,8 @@ The application is configured via `config.ini`. Copy `config.ini.example` as a s
 | `chart_adaptive_display` | `1` = fit chart to visible points; `0` = show all history (default: `1`) |
 | `debug` | Flask debug mode — **set to `0` in production** |
 | `secret_key` | Flask session secret — use a long random string |
-| `url_info` | Optional URL displayed in the web app card |
-| `url_info_name` | Display label for `url_info` |
+| `admin_enabled` | `1` to enable the `/admin` interface, `0` to disable it (default: `0`) |
+| `admin_password` | Werkzeug password hash (see [Admin interface](#admin-interface)) |
 | `email_notif_smtp_server` | SMTP host for alert emails |
 | `email_notif_smtp_port` | SMTP port (e.g. `587` for STARTTLS) |
 | `email_notif_login` | SMTP username |
@@ -246,7 +255,17 @@ default_env = production
 url = https://your-app.com        ; URL checked for web application health
 url_name = My App                 ; display label (optional)
 servers = app1, db1, pgb1         ; comma-separated list of server section names
+send_emails = 1                   ; set to 0 to disable all alerts for this environment
+alert_delay_minutes = 0           ; wait N minutes before sending (0 = immediate)
 ```
+
+| Key | Description |
+|-----|-------------|
+| `url` | URL to health-check (HTTP GET, status 200 = healthy) |
+| `url_name` | Display label shown next to the health indicator |
+| `servers` | Comma-separated list of server section names to monitor |
+| `send_emails` | `1` to send alerts (default), `0` to disable — useful for staging environments |
+| `alert_delay_minutes` | Minutes to wait before sending an alert email. If the issue resolves within the delay window, no email is sent. `0` = send immediately. |
 
 ### Server types
 
@@ -323,8 +342,8 @@ chart_history = 5000
 chart_adaptive_display = 1
 debug = 0
 secret_key = change-me-to-a-long-random-string
-url_info = https://myapp.example.com
-url_info_name = My App
+admin_enabled = 1
+admin_password =
 email_notif_smtp_server = smtp.example.com
 email_notif_smtp_port = 587
 email_notif_login = alerts@example.com
@@ -339,11 +358,15 @@ default_env = production
 url = https://staging.myapp.com
 url_name = Staging
 servers = app_stg, db_stg
+send_emails = 0
+alert_delay_minutes = 0
 
 [production]
 url = https://myapp.com
 url_name = Production
 servers = app_prod, db_prod, pgb_prod
+send_emails = 1
+alert_delay_minutes = 2
 
 [app_stg]
 type = linux
@@ -395,12 +418,58 @@ user = postgres
 password = pgpassword
 ```
 
+## Admin interface
+
+The `/admin` page lets you configure the application from the browser without editing `config.ini` manually.
+
+### Enabling the admin interface
+
+Set `admin_enabled = 1` in `config.ini` and restart. The interface is disabled by default.
+
+### Setting the admin password
+
+**Option A — First-time setup (browser)**
+
+Leave `admin_password` empty in `config.ini`. On your first visit to `/admin`, you will be prompted to set a password. The hash is then saved automatically.
+
+**Option B — CLI hash generation**
+
+Generate a hash and paste it directly into `config.ini`:
+
+```bash
+python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('yourpassword'))"
+```
+
+Then set:
+
+```ini
+[general]
+admin_enabled = 1
+admin_password = scrypt:32768:8:1$...   ; paste the full hash here
+```
+
+### What the admin panel covers
+
+| Tab | Settings |
+|-----|----------|
+| **General** | Display name, refresh rate, chart history, adaptive display, debug mode |
+| **Email** | SMTP server/port/login/password/recipients + per-environment `send_emails` toggle and `alert_delay_minutes` |
+| **Servers** | Host, credentials, chart labels/colors, log file paths for each configured server |
+| **Admin** | Enable/disable the interface, change the admin password |
+
+> Adding or removing environments and servers still requires editing `config.ini` and restarting. The admin panel covers settings that can change at runtime.
+
+### Disabling the admin interface
+
+Set `admin_enabled = 0` (or remove the key). `/admin` will return a `403` immediately without revealing whether an admin exists.
+
 ## Security
 
 - Keep `config.ini` out of version control — it contains SSH and database credentials. Add it to `.gitignore`.
 - Create dedicated read-only users for monitoring (see requirements for each server type above).
 - Use a strong, random `secret_key`.
 - In production, run behind Nginx with TLS and restrict access to trusted IPs.
+- The admin interface is protected by a Werkzeug password hash. Never share or expose the hash directly.
 
 ## Dependencies
 
@@ -408,6 +477,7 @@ password = pgpassword
 |---------|---------|
 | Flask | Web framework |
 | Flask-SocketIO | WebSocket layer |
+| Werkzeug | Password hashing for the admin interface |
 | psycopg | PostgreSQL and PGBouncer connections (requires Python 3.9+) |
 | paramiko | SSH connections to Linux servers |
 | requests | Web application health checks |

@@ -15,8 +15,9 @@ import urllib3
 import fcntl
 import re
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, session, redirect, url_for, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from werkzeug.security import check_password_hash, generate_password_hash
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -42,8 +43,8 @@ REFRESH_RATE = float(config['general']['refresh_rate'])
 
 app = Flask(__name__)
 app.json_encoder = CustomJSONEncoder
-app.config['SECRET_KEY'] = config['general']['secret_key']
-socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
+app.config['SECRET_KEY'] = config['general'].get('secret_key', 'nedara-change-me')
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*", max_decode_packets=50)
 
 DATABASE = 'nedara_monitoring.db'
 SCHEMA = """
@@ -67,8 +68,59 @@ CREATE TABLE IF NOT EXISTS chart_config (
 
 server_data_cache = {}    # {environment: data_dict}
 client_environments = {}  # {sid: environment}
+alert_pending = {}        # {(environment, alert_key): first_seen_datetime}
 TMP_DIR = os.path.join(os.path.dirname(__file__), "tmp")
 os.makedirs(TMP_DIR, exist_ok=True)
+
+
+def _reload_config():
+    global DEFAULT_ENV, REFRESH_RATE
+    config.read('config.ini')
+    DEFAULT_ENV = config['environments']['default_env']
+    REFRESH_RATE = float(config['general']['refresh_rate'])
+    app.config['SECRET_KEY'] = config['general'].get('secret_key', 'nedara-change-me')
+
+
+def _is_send_emails_enabled(environment):
+    try:
+        return config[environment].get('send_emails', '1').strip() == '1'
+    except Exception:
+        return True
+
+
+def _get_alert_delay(environment):
+    try:
+        return float(config[environment].get('alert_delay_minutes', '0'))
+    except Exception:
+        return 0.0
+
+
+def _should_send_alert(environment, alert_key):
+    delay = _get_alert_delay(environment)
+    if delay <= 0:
+        return True
+    key = (environment, alert_key)
+    now = datetime.now()
+    if key not in alert_pending:
+        alert_pending[key] = now
+        return False
+    first_seen = alert_pending[key]
+    elapsed = now - first_seen
+    # Reset stale tracker (issue was gone long enough to be considered a new incident)
+    if elapsed > timedelta(minutes=max(delay * 5, 60)):
+        alert_pending[key] = now
+        return False
+    return elapsed >= timedelta(minutes=delay)
+
+
+def _is_admin_enabled():
+    return config['general'].get('admin_enabled', '0').strip() == '1'
+
+
+def _is_admin_authenticated():
+    return session.get('admin_authenticated') is True
+
+
 def _mail_files(environment):
     safe = re.sub(r'[^a-zA-Z0-9_-]', '_', environment)
     return (
@@ -161,7 +213,13 @@ def _build_mail_body(title, description, details, environment):
 </html>"""
 
 
-def send_notification_mail(data, environment='default'):
+def send_notification_mail(data, environment='default', alert_key=None):
+    if not _is_send_emails_enabled(environment):
+        return False
+
+    if alert_key and not _should_send_alert(environment, alert_key):
+        return False
+
     general_config = config['general']
     lock_file_path, state_file_path = _mail_files(environment)
 
@@ -208,6 +266,10 @@ def send_notification_mail(data, environment='default'):
 
             with open(state_file_path, "w") as f:
                 f.write(datetime.now().isoformat())
+
+            # Clear pending alert so the delay applies fresh on next incident
+            if alert_key:
+                alert_pending.pop((environment, alert_key), None)
 
             return True
 
@@ -264,9 +326,9 @@ def get_environment_config(environment):
     if environment not in config:
         raise ValueError(f"Invalid environment: {environment}")
     return {
-        'url':      config[environment].get('url', ''),
+        'url': config[environment].get('url', ''),
         'url_name': config[environment].get('url_name', ''),
-        'servers':  [s.strip() for s in config[environment].get('servers', '').split(',') if s.strip()],
+        'servers': [s.strip() for s in config[environment].get('servers', '').split(',') if s.strip()],
     }
 
 
@@ -286,8 +348,8 @@ def get_widget_config(environment):
     general_config = config['general']
     data = {
         'current_env': environment,
-        'refresh_rate': general_config['refresh_rate'],
-        'chart_history': general_config['chart_history'],
+        'refresh_rate': general_config.get('refresh_rate', '1'),
+        'chart_history': general_config.get('chart_history', '5000'),
         'chart_info': {},
         'chart_adaptive_display': general_config.get('chart_adaptive_display', '0') == '0',
         'email_configured': bool(
@@ -386,7 +448,7 @@ def get_postgres_stats(postgres_config, environment='default'):
                 details={'Server': server_name, 'Environment': environment},
                 environment=environment,
             ),
-        }, environment)
+        }, environment, alert_key=f'postgres_{server_name}')
         return {'error': str(e), 'server': 'postgres', 'type': 'postgres'}
 
 
@@ -464,7 +526,7 @@ def get_server_stats(server_config, environment='default'):
             "awk '$3~/^(sd[a-z]|vd[a-z]|nvme[0-9]n[0-9]|xvd[a-z])$/{r+=$6;w+=$10} END{print r*512+0, w*512+0}' /proc/diskstats"
         )
         disk_parts = stdout.read().decode().strip().split()
-        disk_read_bytes  = int(disk_parts[0]) if disk_parts else 0
+        disk_read_bytes = int(disk_parts[0]) if disk_parts else 0
         disk_write_bytes = int(disk_parts[1]) if len(disk_parts) > 1 else 0
 
         ssh.close()
@@ -499,7 +561,7 @@ def get_server_stats(server_config, environment='default'):
                 details={'Server': server_config['name'], 'Environment': environment},
                 environment=environment,
             ),
-        }, environment)
+        }, environment, alert_key=f'ssh_{server_config["name"]}')
         return {'error': str(e), 'type': 'linux', 'server': server_config['name']}
 
 
@@ -564,7 +626,7 @@ def check_web_status(environment):
                     details={'URL': web_url, 'Status code': str(response.status_code), 'Environment': environment},
                     environment=environment,
                 ),
-            }, environment)
+            }, environment, alert_key=f'web_error_{environment}')
             return {
                 "status": f"Error: {response.status_code}",
                 "status_code": response.status_code,
@@ -579,7 +641,7 @@ def check_web_status(environment):
                 details={'URL': web_url, 'Environment': environment},
                 environment=environment,
             ),
-        }, environment)
+        }, environment, alert_key=f'web_offline_{environment}')
         return {
             "status": "Offline",
             "status_code": 500,
@@ -620,30 +682,30 @@ def get_pgbouncer_stats(pgbouncer_config):
         cursor.close()
         conn.close()
 
-        total_cl_active  = sum(int(p.get('cl_active',  0)) for p in pools)
+        total_cl_active = sum(int(p.get('cl_active', 0)) for p in pools)
         total_cl_waiting = sum(int(p.get('cl_waiting', 0)) for p in pools)
-        total_sv_active  = sum(int(p.get('sv_active',  0)) for p in pools)
-        total_sv_idle    = sum(int(p.get('sv_idle',    0)) for p in pools)
-        max_wait         = max((float(p.get('maxwait', 0)) for p in pools), default=0.0)
+        total_sv_active = sum(int(p.get('sv_active', 0)) for p in pools)
+        total_sv_idle = sum(int(p.get('sv_idle', 0)) for p in pools)
+        max_wait = max((float(p.get('maxwait', 0)) for p in pools), default=0.0)
 
         db_stats = [s for s in stats if s.get('database') != 'pgbouncer']
-        total_qps      = sum(float(s.get('avg_query_count', 0)) for s in db_stats)
+        total_qps = sum(float(s.get('avg_query_count', 0)) for s in db_stats)
         avg_query_time = (sum(float(s.get('avg_query_time', 0)) for s in db_stats) / len(db_stats) / 1000) if db_stats else 0.0
-        avg_wait_time  = (sum(float(s.get('avg_wait_time',  0)) for s in db_stats) / len(db_stats) / 1000) if db_stats else 0.0
+        avg_wait_time = (sum(float(s.get('avg_wait_time', 0)) for s in db_stats) / len(db_stats) / 1000) if db_stats else 0.0
 
         return {
             'type': 'pgbouncer',
             'name': pgb_name,
             'pools': pools,
-            'total_cl_active':  total_cl_active,
+            'total_cl_active': total_cl_active,
             'total_cl_waiting': total_cl_waiting,
-            'total_sv_active':  total_sv_active,
-            'total_sv_idle':    total_sv_idle,
-            'max_wait':         max_wait,
-            'total_qps':        total_qps,
+            'total_sv_active': total_sv_active,
+            'total_sv_idle': total_sv_idle,
+            'max_wait': max_wait,
+            'total_qps': total_qps,
             'avg_query_time_ms': avg_query_time,
-            'avg_wait_time_ms':  avg_wait_time,
-            'max_client_conn':   pgb_cfg.get('max_client_conn', '?'),
+            'avg_wait_time_ms': avg_wait_time,
+            'max_client_conn': pgb_cfg.get('max_client_conn', '?'),
             'default_pool_size': pgb_cfg.get('default_pool_size', '?'),
         }
     except Exception as e:
@@ -704,10 +766,10 @@ def collect_server_data(environment):
                 prev = prev_net_disk.get(sn)
                 if prev and (ts_now - prev['ts']) > 0:
                     dt = ts_now - prev['ts']
-                    sd['net_mbps']  = max(0.0, (sd['net_rx_bytes'] + sd['net_tx_bytes'] - prev['rx'] - prev['tx']) / dt / 1_000_000)
+                    sd['net_mbps'] = max(0.0, (sd['net_rx_bytes'] + sd['net_tx_bytes'] - prev['rx'] - prev['tx']) / dt / 1_000_000)
                     sd['disk_mbps'] = max(0.0, (sd['disk_read_bytes'] + sd['disk_write_bytes'] - prev['dr'] - prev['dw']) / dt / 1_000_000)
                 else:
-                    sd['net_mbps']  = 0.0
+                    sd['net_mbps'] = 0.0
                     sd['disk_mbps'] = 0.0
                 prev_net_disk[sn] = {
                     'rx': sd.get('net_rx_bytes', 0), 'tx': sd.get('net_tx_bytes', 0),
@@ -736,12 +798,12 @@ def collect_server_data(environment):
             for server_name, server_data in stats.items():
                 if 'chart_label' in server_data and server_data.get('type') == 'linux':
                     chart_label = server_data['chart_label']
-                    save_chart_data('CPUChart',          chart_label, timestamp, float(server_data['cpu_usage']),        environment)
-                    save_chart_data('httpRequestsChart', chart_label, timestamp, float(server_data['http_requests']),    environment)
-                    save_chart_data('RAMChart',          chart_label, timestamp, float(server_data['ram_usage_percent']), environment)
-                    save_chart_data('LoadAvgChart',      chart_label, timestamp, float(server_data.get('load_avg', 0)),  environment)
-                    save_chart_data('NetworkChart',      chart_label, timestamp, float(server_data.get('net_mbps', 0)),  environment)
-                    save_chart_data('DiskIOChart',       chart_label, timestamp, float(server_data.get('disk_mbps', 0)), environment)
+                    save_chart_data('CPUChart', chart_label, timestamp, float(server_data['cpu_usage']), environment)
+                    save_chart_data('httpRequestsChart', chart_label, timestamp, float(server_data['http_requests']), environment)
+                    save_chart_data('RAMChart', chart_label, timestamp, float(server_data['ram_usage_percent']), environment)
+                    save_chart_data('LoadAvgChart', chart_label, timestamp, float(server_data.get('load_avg', 0)), environment)
+                    save_chart_data('NetworkChart', chart_label, timestamp, float(server_data.get('net_mbps', 0)), environment)
+                    save_chart_data('DiskIOChart', chart_label, timestamp, float(server_data.get('disk_mbps', 0)), environment)
 
             socketio.emit('server_data_update', data, room=environment)
 
@@ -831,6 +893,149 @@ def handle_save_chart_config(data):
     max_points = data.get('max_points')
     chart_type = data.get('chart_type')
     save_chart_config(chart_id, max_points, chart_type)
+
+
+@app.route('/admin')
+def admin_index():
+    if not _is_admin_enabled():
+        return 'Admin interface is disabled.', 403
+
+    admin_password = config['general'].get('admin_password', '').strip()
+    if not admin_password:
+        return render_template('admin.html', state='setup', config=None, environments=[], error=None)
+
+    if not _is_admin_authenticated():
+        error = request.args.get('error')
+        return render_template('admin.html', state='login', config=None, environments=[], error=error)
+
+    envs = get_available_environments()
+    cfg = {
+        'general': dict(config['general']),
+        'environments': {e: dict(config[e]) for e in envs if e in config},
+        'servers': {},
+    }
+    for e in envs:
+        if e not in config:
+            continue
+        for sname in [s.strip() for s in config[e].get('servers', '').split(',') if s.strip()]:
+            if sname in config:
+                cfg['servers'][sname] = dict(config[sname])
+
+    return render_template('admin.html', state='admin', config=cfg, environments=envs, error=None)
+
+
+@app.route('/admin/login', methods=['POST'])
+def admin_login():
+    if not _is_admin_enabled():
+        return 'Admin interface is disabled.', 403
+
+    password = request.form.get('password', '')
+    stored_hash = config['general'].get('admin_password', '').strip()
+
+    if stored_hash and check_password_hash(stored_hash, password):
+        session['admin_authenticated'] = True
+        return redirect(url_for('admin_index'))
+
+    return redirect(url_for('admin_index') + '?error=Incorrect+password')
+
+
+@app.route('/admin/setup', methods=['POST'])
+def admin_setup():
+    if not _is_admin_enabled():
+        return 'Admin interface is disabled.', 403
+
+    if config['general'].get('admin_password', '').strip():
+        return redirect(url_for('admin_index'))
+
+    password = request.form.get('password', '').strip()
+    confirm = request.form.get('confirm', '').strip()
+
+    if not password or password != confirm:
+        return render_template('admin.html', state='setup', config=None, environments=[], error='Passwords do not match.')
+
+    if len(password) < 6:
+        return render_template('admin.html', state='setup', config=None, environments=[], error='Password must be at least 6 characters.')
+
+    config['general']['admin_password'] = generate_password_hash(password)
+    with open('config.ini', 'w') as f:
+        config.write(f)
+
+    session['admin_authenticated'] = True
+    return redirect(url_for('admin_index'))
+
+
+@app.route('/admin/logout')
+def admin_logout():
+    session.pop('admin_authenticated', None)
+    return redirect(url_for('admin_index'))
+
+
+@app.route('/admin/save', methods=['POST'])
+def admin_save():
+    if not _is_admin_enabled():
+        return jsonify({'success': False, 'message': 'Admin disabled'}), 403
+    if not _is_admin_authenticated():
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    try:
+        data = request.get_json(force=True)
+
+        # General settings
+        general_fields = ['display_name', 'refresh_rate', 'chart_history', 'chart_adaptive_display', 'debug']
+        for field in general_fields:
+            if field in data.get('general', {}):
+                config['general'][field] = str(data['general'][field])
+
+        # Email settings (keep existing password if empty string sent)
+        email_fields = ['email_notif_smtp_server', 'email_notif_smtp_port', 'email_notif_login', 'email_notif_recipients']
+        for field in email_fields:
+            if field in data.get('email', {}):
+                config['general'][field] = str(data['email'][field])
+        if data.get('email', {}).get('email_notif_password', '').strip():
+            config['general']['email_notif_password'] = data['email']['email_notif_password']
+
+        # Per-environment settings
+        for env, env_data in data.get('environments', {}).items():
+            if env not in config:
+                continue
+            if 'send_emails' in env_data:
+                config[env]['send_emails'] = str(env_data['send_emails'])
+            if 'alert_delay_minutes' in env_data:
+                config[env]['alert_delay_minutes'] = str(env_data['alert_delay_minutes'])
+
+        # Server settings (credentials only — type/name/host changes need restart)
+        for sname, sdata in data.get('servers', {}).items():
+            if sname not in config:
+                continue
+            for field in ['host', 'user', 'chart_label', 'chart_color', 'log_file', 'nginx_access_file', 'port', 'database']:
+                if field in sdata:
+                    config[sname][field] = str(sdata[field])
+            if sdata.get('password', '').strip():
+                config[sname]['password'] = sdata['password']
+
+        # Admin settings
+        if 'admin' in data:
+            admin_data = data['admin']
+            if 'admin_enabled' in admin_data:
+                config['general']['admin_enabled'] = str(admin_data['admin_enabled'])
+            if admin_data.get('new_password', '').strip():
+                current = admin_data.get('current_password', '')
+                stored = config['general'].get('admin_password', '')
+                if not check_password_hash(stored, current):
+                    return jsonify({'success': False, 'message': 'Incorrect current password'}), 400
+                new_pw = admin_data['new_password'].strip()
+                if len(new_pw) < 6:
+                    return jsonify({'success': False, 'message': 'New password must be at least 6 characters'}), 400
+                config['general']['admin_password'] = generate_password_hash(new_pw)
+
+        with open('config.ini', 'w') as f:
+            config.write(f)
+        _reload_config()
+
+        return jsonify({'success': True, 'message': 'Configuration saved successfully'})
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 if __name__ == '__main__':

@@ -1,44 +1,22 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ display_name }}</title>
-    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+{% extends 'base.html' %}
 
-    <!-- Anti-FOUC: apply saved theme before any render -->
-    <script>
-        (function () {
-            const t = localStorage.getItem('nedara-theme') || 'auto';
-            const dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-            if (dark) document.documentElement.classList.add('dark');
-        })();
-    </script>
+{% block title %}{{ display_name }}{% endblock %}
 
-    <!-- Tailwind: layout utilities only (no dark: variants) -->
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: { extend: { fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] } } }
-        }
-    </script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style type="text/tailwindcss">
-        body { @apply font-sans antialiased; }
-    </style>
+{% block favicon %}
+<link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+{% endblock %}
 
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/monitoring.css') }}">
-    <script src="{{ url_for('static', filename='js/lib/jquery/jquery.min.js') }}"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.8.1/socket.io.min.js"></script>
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="{{ url_for('static', filename='js/lib/underscorejs/underscore.min.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/lib/nedarajs/nedara.js') }}" type="module"></script>
-    <script src="{{ url_for('static', filename='js/monitoring.js') }}" type="module"></script>
-</head>
-<body>
+{% block head_extra %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/monitoring.css') }}">
+<script src="{{ url_for('static', filename='js/lib/jquery/jquery.min.js') }}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.8.1/socket.io.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/lib/underscorejs/underscore.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/lib/nedarajs/nedara.js') }}" type="module"></script>
+<script src="{{ url_for('static', filename='js/monitoring.js') }}" type="module"></script>
+{% endblock %}
 
+{% block body %}
     <!-- Loading screen -->
     <div id="loading-container">
         <div class="wave-container">
@@ -71,7 +49,7 @@
                     <option value="{{ env }}">{{ env }}</option>
                     {% endfor %}
                 </select>
-                <span id="mail-indicator" class="topbar-mail-indicator" style="display:none" title="Notifications email actives">✉ Mail</span>
+                <span id="mail-indicator" class="topbar-mail-indicator" style="display:none" title="Email notifications active">✉ Mail</span>
                 <button id="theme-toggle" class="btn-theme" title="Cycle theme: Auto → Light → Dark">
                     <span id="theme-icon">⊙</span>
                     <span id="theme-label">Auto</span>
@@ -128,6 +106,4 @@
             <a href="https://github.com/Nedara-Project/nedara-monitoring" target="_blank" rel="noopener noreferrer">Powered by Nedara Monitoring</a>
         </footer>
     </div>
-
-</body>
-</html>
+{% endblock %}

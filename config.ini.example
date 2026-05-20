@@ -1,9 +1,14 @@
-; This is an example. You need to adapt this config file.
-; The configuration is modular. What is mandatory is : general and environments.
-; You can set any server env name that you want.
-; Servers must be `linux`, `postgres`, or `pgbouncer` type.
-; Important: Pay attention having correct access rights on files you mention (cfr. SSH user being used).
+; Nedara Monitoring — example configuration file.
+; Copy this file to config.ini and adapt it to your infrastructure.
+;
+; The configuration is modular. The [general] and [environments] sections are mandatory.
+; Environment and server section names are free — use whatever names make sense to you.
+; Server types supported: linux, postgres, pgbouncer.
+; Important: make sure the SSH user has read access to all files referenced below.
 
+; ──────────────────────────────────────────────────────────────
+; GENERAL
+; ──────────────────────────────────────────────────────────────
 [general]
 port = 5000
 display_name =
@@ -12,34 +17,68 @@ chart_history = 5000
 chart_adaptive_display = 1
 debug = 0
 secret_key = your-secret-app-key
-url_info = https://your-additional-url
-url_info_name =
+
+; ── Admin interface (/admin) ──
+; Set admin_enabled=1 to enable the web-based configuration interface at /admin.
+; On first access, you will be prompted to set a password directly in the browser.
+;
+; To set the password hash manually instead:
+;   python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('yourpassword'))"
+; Then paste the output below.
+;
+; Set admin_enabled=0 (or leave it unset) to disable /admin entirely (returns 403).
+admin_enabled = 0
+admin_password =
+
+; ── Email notifications ──
+; Leave all fields empty to disable email alerts.
 email_notif_smtp_server =
 email_notif_smtp_port =
 email_notif_login =
 email_notif_password =
 email_notif_recipients = recipient1@mail.com, recipient2@mail.com
 
+; ──────────────────────────────────────────────────────────────
+; ENVIRONMENTS
+; ──────────────────────────────────────────────────────────────
 [environments]
 available_env = env1, env2
 default_env = env2
 
+; ──────────────────────────────────────────────────────────────
+; ENVIRONMENT SECTIONS
+; ──────────────────────────────────────────────────────────────
 [env1]
 url = https://your-url1
 url_name =
 servers = serv1, serv2, serv3, pgb1
+; send_emails: set to 0 to disable all email alerts for this environment (e.g. staging).
+send_emails = 1
+; alert_delay_minutes: wait this many minutes before sending an alert.
+; Prevents notifications for brief/transient outages. 0 = send immediately.
+alert_delay_minutes = 0
 
 [env2]
 url = https://your-url2
+url_name =
 servers = serv4, serv5, serv6
+send_emails = 1
+alert_delay_minutes = 0
 
+; ──────────────────────────────────────────────────────────────
+; SERVER SECTIONS
+; ──────────────────────────────────────────────────────────────
+
+; Linux server (SSH)
 [serv1]
 type = linux
 name =
 host =
 user =
 password =
+; log_file: optional — path to a log file to tail (displayed via the "Logs" button)
 log_file =
+; nginx_access_file: optional — enables the HTTP Requests chart
 nginx_access_file =
 chart_label =
 chart_color = #3b82f6
@@ -53,6 +92,7 @@ password =
 chart_label =
 chart_color = #10b981
 
+; PostgreSQL database
 [serv3]
 type = postgres
 name =
@@ -62,9 +102,10 @@ user =
 password =
 database =
 
-; PGBouncer section (optional) — monitors the PGBouncer connection pooler.
-; Connects to the pgbouncer admin database using psycopg (pg protocol).
-; The user must have access to run SHOW POOLS; SHOW STATS; SHOW CONFIG; on pgbouncer.
+; PGBouncer connection pooler (optional)
+; Connects to the pgbouncer admin database using the PostgreSQL protocol.
+; The user must be listed in admin_users in pgbouncer.ini and have access to
+; run SHOW POOLS; SHOW STATS; SHOW CONFIG; on the pgbouncer admin interface.
 [pgb1]
 type = pgbouncer
 name = PGBouncer

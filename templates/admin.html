@@ -1,0 +1,535 @@
+{% extends 'base.html' %}
+
+{% block title %}Nedara Monitoring{% endblock %}
+
+{% block head_extra %}
+<style>
+    /* Toggle slider — not achievable with pure Tailwind utilities */
+    .toggle-slider {
+        position: absolute; inset: 0;
+        background: #cbd5e1; border-radius: 9999px; cursor: pointer;
+        transition: background .2s;
+    }
+    .dark .toggle-slider { background: #334155; }
+    .toggle-slider::before {
+        content: ''; position: absolute;
+        height: 16px; width: 16px; left: 3px; bottom: 3px;
+        background: white; border-radius: 50%; transition: transform .2s;
+    }
+    input:checked + .toggle-slider { background: #6366f1; }
+    input:checked + .toggle-slider::before { transform: translateX(16px); }
+
+    /* Toast animation */
+    #toast {
+        transition: opacity .2s, transform .2s;
+        opacity: 0; transform: translateY(8px);
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+
+    /* Tab underline active state */
+    .tab-btn { border-bottom: 2px solid transparent; }
+    .tab-btn.active { @apply text-indigo-500 border-indigo-500; }
+</style>
+{% endblock %}
+
+{% block body_class %}bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen{% endblock %}
+
+{% block body %}
+
+<!-- ─── TOPBAR ─── -->
+<header class="sticky top-0 z-50 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-6 h-14 backdrop-blur-sm">
+    <div class="flex items-center gap-3">
+        <span class="font-bold text-indigo-500 text-lg">⚙ Nedara Monitoring</span>
+        {% if state == 'admin' %}
+        <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">Configuration panel</span>
+        {% endif %}
+    </div>
+    <div class="flex items-center gap-2">
+        <button id="theme-toggle" onclick="cycleTheme()" class="btn-theme" title="Cycle theme: Auto → Light → Dark">
+            <span id="theme-icon">⊙</span>
+            <span id="theme-label">Auto</span>
+        </button>
+        {% if state == 'admin' %}
+        <a href="/"
+           class="px-3 py-1.5 text-sm border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors no-underline">
+            Dashboard
+        </a>
+        <a href="/admin/logout"
+           class="px-3 py-1.5 text-sm rounded-lg bg-red-500 hover:bg-red-600 text-white font-medium transition-colors no-underline">
+            Logout
+        </a>
+        {% endif %}
+    </div>
+</header>
+
+
+{% if state == 'setup' %}
+<!-- ═══════════════════════ FIRST TIME SETUP ═══════════════════════ -->
+<div class="min-h-[calc(100vh-56px)] flex items-center justify-center p-8">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-10 w-full max-w-md">
+        <div class="text-4xl mb-4">🔐</div>
+        <h2 class="text-xl font-bold mb-1">First-time setup</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mb-7">Set a password to protect the admin interface.</p>
+
+        {% if error %}
+        <div class="mb-5 px-4 py-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-sm text-red-600 dark:text-red-400">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/admin/setup" class="space-y-4">
+            <div class="flex flex-col gap-1.5">
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Password</label>
+                <input type="password" name="password" required minlength="6" placeholder="At least 6 characters" autofocus
+                       class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:text-slate-100">
+            </div>
+            <div class="flex flex-col gap-1.5">
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Confirm password</label>
+                <input type="password" name="confirm" required placeholder="Repeat password"
+                       class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:text-slate-100">
+            </div>
+            <button type="submit"
+                    class="w-full mt-2 px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-semibold rounded-lg transition-colors">
+                Set password &amp; enter
+            </button>
+        </form>
+
+        <div class="mt-6 p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-500 dark:text-slate-400 space-y-2">
+            <p class="font-semibold text-slate-700 dark:text-slate-300">CLI alternative</p>
+            <p>To set the hash directly in <code class="font-mono">config.ini</code>:</p>
+            <code class="block font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 break-all">
+                python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('your_password'))"
+            </code>
+            <p>Then paste the output into: <code class="font-mono">[general] admin_password = &lt;hash&gt;</code></p>
+        </div>
+    </div>
+</div>
+
+
+{% elif state == 'login' %}
+<!-- ═══════════════════════ LOGIN ═══════════════════════ -->
+<div class="min-h-[calc(100vh-56px)] flex items-center justify-center p-8">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-10 w-full max-w-md">
+        <div class="text-4xl mb-4">🔒</div>
+        <h2 class="text-xl font-bold mb-1">Admin login</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mb-7">Restricted access. Enter your admin password.</p>
+
+        {% if error %}
+        <div class="mb-5 px-4 py-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-sm text-red-600 dark:text-red-400">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/admin/login" class="space-y-4">
+            <div class="flex flex-col gap-1.5">
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Password</label>
+                <input type="password" name="password" required autofocus
+                       class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:text-slate-100">
+            </div>
+            <button type="submit"
+                    class="w-full mt-2 px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-semibold rounded-lg transition-colors">
+                Sign in
+            </button>
+        </form>
+    </div>
+</div>
+
+
+{% elif state == 'admin' %}
+<!-- ═══════════════════════ ADMIN PANEL ═══════════════════════ -->
+<div class="max-w-4xl mx-auto px-6 py-8">
+
+    <div class="mb-6 px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-400">
+        Changes to environments, servers, or the port require an application <strong>restart</strong> to take effect. Email and general settings apply immediately.
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 border-b border-slate-200 dark:border-slate-800 mb-7">
+        <button class="tab-btn active px-4 py-2.5 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-[-1px] transition-colors bg-transparent border-0 cursor-pointer"
+                onclick="showTab('general', this)">General</button>
+        <button class="tab-btn px-4 py-2.5 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-[-1px] transition-colors bg-transparent border-0 cursor-pointer"
+                onclick="showTab('email', this)">Email</button>
+        <button class="tab-btn px-4 py-2.5 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-[-1px] transition-colors bg-transparent border-0 cursor-pointer"
+                onclick="showTab('servers', this)">Servers</button>
+        <button class="tab-btn px-4 py-2.5 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-[-1px] transition-colors bg-transparent border-0 cursor-pointer"
+                onclick="showTab('admin_settings', this)">Admin</button>
+    </div>
+
+    <!-- ── TAB: GENERAL ── -->
+    <div id="tab-general" class="tab-pane">
+        <div class="mb-8">
+            <p class="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 pb-2 mb-5">General settings</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Display name</label>
+                    <input type="text" id="display_name" value="{{ config.general.get('display_name', '') }}"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Refresh interval (seconds)</label>
+                    <input type="number" id="refresh_rate" min="1" max="60" step="0.5" value="{{ config.general.get('refresh_rate', '1') }}"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Chart history (max points per series)</label>
+                    <input type="number" id="chart_history" min="100" max="50000" step="100" value="{{ config.general.get('chart_history', '5000') }}"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5 justify-end pb-1">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Chart adaptive display</label>
+                    <div class="flex items-center gap-3 mt-1">
+                        <label class="relative inline-block w-[38px] h-[22px] flex-shrink-0">
+                            <input type="checkbox" id="chart_adaptive_display" class="opacity-0 w-0 h-0"
+                                {% if config.general.get('chart_adaptive_display', '0') == '1' %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Enable</span>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-1.5 justify-end pb-1">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Flask debug mode</label>
+                    <div class="flex items-center gap-3 mt-1">
+                        <label class="relative inline-block w-[38px] h-[22px] flex-shrink-0">
+                            <input type="checkbox" id="debug" class="opacity-0 w-0 h-0"
+                                {% if config.general.get('debug', '0') == '1' %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Enable</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── TAB: EMAIL ── -->
+    <div id="tab-email" class="tab-pane hidden">
+        <div class="mb-8">
+            <p class="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 pb-2 mb-5">SMTP server</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">SMTP server</label>
+                    <input type="text" id="email_smtp_server" value="{{ config.general.get('email_notif_smtp_server', '') }}" placeholder="smtp.example.com"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">SMTP port</label>
+                    <input type="number" id="email_smtp_port" value="{{ config.general.get('email_notif_smtp_port', '587') }}" min="1" max="65535"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sender address (login)</label>
+                    <input type="email" id="email_login" value="{{ config.general.get('email_notif_login', '') }}"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">SMTP password</label>
+                    <input type="password" id="email_password" placeholder="Leave empty to keep current"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <span class="text-xs text-slate-400 dark:text-slate-500">Leave blank to keep the existing password.</span>
+                </div>
+                <div class="flex flex-col gap-1.5 sm:col-span-2">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Recipients (comma-separated)</label>
+                    <input type="text" id="email_recipients" value="{{ config.general.get('email_notif_recipients', '') }}" placeholder="a@example.com, b@example.com"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-8">
+            <p class="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 pb-2 mb-5">Alerts per environment</p>
+            {% for env in environments %}
+            {% set ecfg = config.environments.get(env, {}) %}
+            <div class="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-5 mb-4">
+                <p class="font-bold text-indigo-500 text-sm mb-4">{{ env }}</p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Send email alerts</label>
+                        <div class="flex items-center gap-3 mt-1">
+                            <label class="relative inline-block w-[38px] h-[22px] flex-shrink-0">
+                                <input type="checkbox" class="env-send-emails opacity-0 w-0 h-0" data-env="{{ env }}"
+                                    {% if ecfg.get('send_emails', '1') == '1' %}checked{% endif %}>
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="text-sm text-slate-700 dark:text-slate-300">Enabled for {{ env }}</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Alert delay (minutes)</label>
+                        <input type="number" class="env-alert-delay bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-env="{{ env }}" min="0" max="60" step="0.5"
+                               value="{{ ecfg.get('alert_delay_minutes', '0') }}" placeholder="0">
+                        <span class="text-xs text-slate-400 dark:text-slate-500">0 = immediate. Example: 2 = waits 2 min before alerting (ignores brief outages).</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ── TAB: SERVERS ── -->
+    <div id="tab-servers" class="tab-pane hidden">
+        {% for env in environments %}
+        {% set ecfg = config.environments.get(env, {}) %}
+        <div class="mb-8">
+            <p class="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 pb-2 mb-5">Environment: {{ env }}</p>
+
+            {% set server_names = ecfg.get('servers', '').split(',') %}
+            {% for sname in server_names %}
+            {% set sname = sname.strip() %}
+            {% if sname and sname in config.servers %}
+            {% set sc = config.servers[sname] %}
+            <div class="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-5 mb-4">
+                <div class="flex items-center gap-3 mb-5">
+                    {% if sc.get('type') == 'linux' %}
+                    <span class="px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400">linux</span>
+                    {% elif sc.get('type') == 'postgres' %}
+                    <span class="px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400">postgres</span>
+                    {% elif sc.get('type') == 'pgbouncer' %}
+                    <span class="px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400">pgbouncer</span>
+                    {% endif %}
+                    <span class="font-semibold text-sm">{{ sc.get('name', sname) }}</span>
+                    <span class="text-xs text-slate-400 dark:text-slate-500">— {{ sname }}</span>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Host / IP</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="host" value="{{ sc.get('host', '') }}">
+                    </div>
+                    {% if sc.get('type') == 'linux' %}
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">SSH user</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="user" value="{{ sc.get('user', '') }}">
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">SSH password</label>
+                        <input type="password" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="password" placeholder="Leave empty to keep current">
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Chart label</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="chart_label" value="{{ sc.get('chart_label', '') }}">
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Chart color (hex)</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="chart_color" value="{{ sc.get('chart_color', '#6366f1') }}" placeholder="#6366f1">
+                    </div>
+                    <div class="flex flex-col gap-1.5 sm:col-span-2">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Log file path (optional)</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="log_file" value="{{ sc.get('log_file', '') }}" placeholder="/var/log/app.log">
+                    </div>
+                    <div class="flex flex-col gap-1.5 sm:col-span-2">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Nginx access log path (optional)</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="nginx_access_file" value="{{ sc.get('nginx_access_file', '') }}" placeholder="/var/log/nginx/access.log">
+                    </div>
+                    {% elif sc.get('type') == 'postgres' or sc.get('type') == 'pgbouncer' %}
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Port</label>
+                        <input type="number" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="port" value="{{ sc.get('port', '5432') }}">
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">User</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="user" value="{{ sc.get('user', '') }}">
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Password</label>
+                        <input type="password" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="password" placeholder="Leave empty to keep current">
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Database</label>
+                        <input type="text" class="srv-field bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               data-srv="{{ sname }}" data-field="database" value="{{ sc.get('database', '') }}">
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- ── TAB: ADMIN SETTINGS ── -->
+    <div id="tab-admin_settings" class="tab-pane hidden">
+        <div class="mb-8">
+            <p class="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 pb-2 mb-5">Admin interface</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Enable /admin interface</label>
+                    <div class="flex items-center gap-3 mt-1">
+                        <label class="relative inline-block w-[38px] h-[22px] flex-shrink-0">
+                            <input type="checkbox" id="admin_enabled" class="opacity-0 w-0 h-0"
+                                {% if config.general.get('admin_enabled', '0') == '1' %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Enable</span>
+                    </div>
+                    <span class="text-xs text-slate-400 dark:text-slate-500">If disabled, /admin returns 403. Takes effect immediately — save first.</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-8">
+            <p class="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 pb-2 mb-5">Change admin password</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Current password</label>
+                    <input type="password" id="pw_current" placeholder="Current password" autocomplete="current-password"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">New password</label>
+                    <input type="password" id="pw_new" placeholder="Leave empty to keep current" minlength="6" autocomplete="new-password"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Confirm new password</label>
+                    <input type="password" id="pw_confirm" placeholder="Repeat new password" autocomplete="new-password"
+                           class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-8">
+            <p class="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 pb-2 mb-5">Generate a password hash (CLI)</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mb-3">
+                To set the password directly in <code class="font-mono text-xs">config.ini</code> without using this interface:
+            </p>
+            <code class="block font-mono text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-3 break-all text-slate-700 dark:text-slate-300">
+                python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('your_password'))"
+            </code>
+            <p class="text-xs text-slate-400 dark:text-slate-500 mt-3">
+                Paste the output into <code class="font-mono">config.ini</code>: <code class="font-mono">[general] admin_password = &lt;hash&gt;</code>
+            </p>
+        </div>
+    </div>
+
+    <!-- Save bar -->
+    <div class="sticky bottom-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 px-6 py-4 flex items-center gap-4 -mx-6 mt-4">
+        <button onclick="saveConfig()"
+                class="px-5 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-60 text-white text-sm font-semibold rounded-lg transition-colors">
+            Save changes
+        </button>
+    </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="fixed bottom-20 right-6 px-5 py-3 rounded-xl text-sm font-medium shadow-2xl pointer-events-none z-50"></div>
+
+<script>
+    function showTab(name, btn) {
+        document.querySelectorAll('.tab-pane').forEach(p => {
+            p.classList.add('hidden');
+            p.classList.remove('block');
+        });
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        const pane = document.getElementById('tab-' + name);
+        if (pane) { pane.classList.remove('hidden'); pane.classList.add('block'); }
+        if (btn) btn.classList.add('active');
+    }
+    document.getElementById('tab-general').classList.remove('hidden');
+
+    function showToast(msg, type) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.className = 'fixed bottom-20 right-6 px-5 py-3 rounded-xl text-sm font-medium shadow-2xl pointer-events-none z-50 show '
+            + (type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white');
+        clearTimeout(t._timer);
+        t._timer = setTimeout(() => {
+            t.className = 'fixed bottom-20 right-6 px-5 py-3 rounded-xl text-sm font-medium shadow-2xl pointer-events-none z-50';
+        }, 3500);
+    }
+
+    function saveConfig() {
+        const pwNew = document.getElementById('pw_new')?.value || '';
+        const pwConfirm = document.getElementById('pw_confirm')?.value || '';
+        if (pwNew && pwNew !== pwConfirm) {
+            showToast('Passwords do not match', 'error');
+            return;
+        }
+
+        const envData = {};
+        document.querySelectorAll('.env-send-emails').forEach(el => {
+            const env = el.dataset.env;
+            if (!envData[env]) envData[env] = {};
+            envData[env].send_emails = el.checked ? '1' : '0';
+        });
+        document.querySelectorAll('.env-alert-delay').forEach(el => {
+            const env = el.dataset.env;
+            if (!envData[env]) envData[env] = {};
+            envData[env].alert_delay_minutes = el.value || '0';
+        });
+
+        const servers = {};
+        document.querySelectorAll('.srv-field').forEach(el => {
+            const srv = el.dataset.srv;
+            const field = el.dataset.field;
+            if (!servers[srv]) servers[srv] = {};
+            servers[srv][field] = el.value;
+        });
+
+        const payload = {
+            general: {
+                display_name: document.getElementById('display_name')?.value || '',
+                refresh_rate: document.getElementById('refresh_rate')?.value || '1',
+                chart_history: document.getElementById('chart_history')?.value || '5000',
+                chart_adaptive_display: document.getElementById('chart_adaptive_display')?.checked ? '1' : '0',
+                debug: document.getElementById('debug')?.checked ? '1' : '0',
+            },
+            email: {
+                email_notif_smtp_server: document.getElementById('email_smtp_server')?.value || '',
+                email_notif_smtp_port: document.getElementById('email_smtp_port')?.value || '587',
+                email_notif_login: document.getElementById('email_login')?.value || '',
+                email_notif_password: document.getElementById('email_password')?.value || '',
+                email_notif_recipients: document.getElementById('email_recipients')?.value || '',
+            },
+            environments: envData,
+            servers: servers,
+            admin: {
+                admin_enabled: document.getElementById('admin_enabled')?.checked ? '1' : '0',
+                current_password: document.getElementById('pw_current')?.value || '',
+                new_password: pwNew,
+            },
+        };
+
+        const btn = document.querySelector('[onclick="saveConfig()"]');
+        btn.textContent = 'Saving…';
+        btn.disabled = true;
+
+        fetch('/admin/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+        .then(r => r.json())
+        .then(data => {
+            btn.textContent = 'Save changes';
+            btn.disabled = false;
+            if (data.success) {
+                showToast('Saved successfully', 'success');
+                ['pw_current', 'pw_new', 'pw_confirm', 'email_password'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = '';
+                });
+            } else {
+                showToast(data.message || 'Save failed', 'error');
+            }
+        })
+        .catch(err => {
+            btn.textContent = 'Save changes';
+            btn.disabled = false;
+            showToast('Network error: ' + err.message, 'error');
+        });
+    }
+</script>
+{% endif %}
+
+{% endblock %}

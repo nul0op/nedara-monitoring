@@ -35,14 +35,10 @@ const Monitoring = Nedara.createWidget({
 
         this._loadingTimeout = setTimeout(() => this._showDashboard(), 15000);
 
-        const savedTheme = localStorage.getItem('nedara-theme') || 'auto';
-        this.updateThemeButton(savedTheme);
+        window.updateThemeButton(localStorage.getItem('nedara-theme') || 'auto');
 
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-            if ((localStorage.getItem('nedara-theme') || 'auto') === 'auto') {
-                this.applyTheme('auto');
-            }
-        });
+        new MutationObserver(() => this.updateChartThemes())
+            .observe(document.documentElement, { attributeFilter: ['class'] });
 
         this.render();
         this.setupSocketListeners();
@@ -83,7 +79,21 @@ const Monitoring = Nedara.createWidget({
         });
 
         this.socket.on('historical_data_response', function (data) {
-            if (!data.data || !data.data.length) return;
+            if (!data.data || !data.data.length) {
+                // Retry after a short delay if we have very few live points (DB may have been empty at connect time)
+                const conf = self.charts?.find(c => c.id === data.chart_id);
+                if (conf) {
+                    const live = self.seriesData[data.chart_id]?.[data.series_name] || [];
+                    if (live.length < 5) {
+                        setTimeout(() => {
+                            if (self.chartsInfoMap[data.chart_id]?.find(i => i.label === data.series_name)) {
+                                self.loadHistoricalData(data.chart_id, data.series_name, conf.maxPoints);
+                            }
+                        }, 3000);
+                    }
+                }
+                return;
+            }
 
             const formatted = data.data
                 .map(item => ({ time: Math.floor(item.time), value: parseFloat(item.value) }))
@@ -94,8 +104,13 @@ const Monitoring = Nedara.createWidget({
             const seriesInfo = self.chartsInfoMap[data.chart_id]
                 ?.find(i => i.label === data.series_name);
             if (seriesInfo) {
-                self.seriesData[data.chart_id][data.series_name] = unique;
-                seriesInfo.series.setData(unique);
+                // Preserve live points collected while waiting for history to arrive
+                const existing = self.seriesData[data.chart_id][data.series_name] || [];
+                const lastHistTime = unique.length ? unique[unique.length - 1].time : 0;
+                const liveAfter = existing.filter(p => p.time > lastHistTime);
+                const merged = self.ensureUniqueTimestamps([...unique, ...liveAfter]);
+                self.seriesData[data.chart_id][data.series_name] = merged;
+                seriesInfo.series.setData(merged);
                 self[data.chart_id].timeScale().fitContent();
             }
         });
@@ -673,26 +688,12 @@ const Monitoring = Nedara.createWidget({
     // ——————————————————————————————————————————
 
     applyTheme: function (theme) {
-        const root = document.documentElement;
-        if (theme === 'dark')       root.classList.add('dark');
-        else if (theme === 'light') root.classList.remove('dark');
-        else window.matchMedia('(prefers-color-scheme: dark)').matches
-            ? root.classList.add('dark')
-            : root.classList.remove('dark');
+        window.applyThemeClass(theme);
         this.updateChartThemes();
     },
 
     updateThemeButton: function (theme) {
-        const map = {
-            auto:  { icon: '⊙', label: 'Auto'  },
-            light: { icon: '☀', label: 'Light' },
-            dark:  { icon: '☾', label: 'Dark'  },
-        };
-        const { icon, label } = map[theme] || map.auto;
-        const i = document.getElementById('theme-icon');
-        const l = document.getElementById('theme-label');
-        if (i) i.textContent = icon;
-        if (l) l.textContent = label;
+        window.updateThemeButton(theme);
     },
 
     // ——————————————————————————————————————————
@@ -824,12 +825,7 @@ const Monitoring = Nedara.createWidget({
     },
 
     _onThemeToggleClick: function () {
-        const order   = ['auto', 'light', 'dark'];
-        const current = localStorage.getItem('nedara-theme') || 'auto';
-        const next    = order[(order.indexOf(current) + 1) % order.length];
-        localStorage.setItem('nedara-theme', next);
-        this.applyTheme(next);
-        this.updateThemeButton(next);
+        window.cycleTheme();
     },
 });
 
