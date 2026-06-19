@@ -2,3 +2,4 @@ config.ini
 __pycache__/
 nedara_monitoring.db
 tmp/
+.venv
