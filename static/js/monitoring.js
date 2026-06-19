@@ -390,6 +390,12 @@ const Monitoring = Nedara.createWidget({
                         }
                     }
 
+                    const mounts = (server.mounts || []).map(m => Object.assign({}, m, {
+                        percent_usage_class: this.getStatusClass(m.percent),
+                        percent_value_class: this.getValueColorClass(m.percent),
+                    }));
+                    const worstMountPct = mounts.length ? Math.max(...mounts.map(m => m.percent)) : 0;
+
                     $serversRow.append(Nedara.renderTemplate('linux-server', Object.assign({
                         id: key,
                         cpu_usage_class:     this.getStatusClass(server.cpu_usage),
@@ -401,8 +407,9 @@ const Monitoring = Nedara.createWidget({
                         health_class: this.getHealthStatus({
                             cpu: server.cpu_usage,
                             ram: server.ram_usage_percent,
-                            storage: server.storage_usage_percent,
+                            storage: Math.max(server.storage_usage_percent, worstMountPct),
                         }),
+                        mounts,
                     }, server)));
 
                     chartDataMap[server.chart_label] = {

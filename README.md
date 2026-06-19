@@ -15,6 +15,7 @@ Nedara Monitoring is an open-source web application that collects metrics from y
 - **Multi-environment support** — switch between environments (production, staging, …) from the UI; each environment has its own collection thread and independent chart history
 - **Linux server monitoring** (via SSH)
   - CPU, RAM, and disk utilization with progress bars and color coding
+  - Mounted volumes — all non-root partitions (ext4, xfs, LVM, NFS, etc.) with individual usage bars and detail (used / total, free). Shown by default; set `show_mounts = 0` per server to hide.
   - Load average (1-minute)
   - Network throughput (MB/s receive / transmit)
   - Disk I/O (MB/s read / write)

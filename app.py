@@ -536,6 +536,42 @@ def get_server_stats(server_config, environment='default'):
         disk_read_bytes = int(disk_parts[0]) if disk_parts else 0
         disk_write_bytes = int(disk_parts[1]) if len(disk_parts) > 1 else 0
 
+        # Mounted filesystems (excluding root and virtual filesystems)
+        mounts = []
+        if server_config.get('show_mounts', '1') != '0':
+            stdin, stdout, stderr = ssh.exec_command(
+                "df -B1 -x tmpfs -x devtmpfs -x squashfs 2>/dev/null | "
+                "awk 'NR>1 && $6 != \"/\" {gsub(/%/, \"\", $5); "
+                "printf \"%s\\t%s\\t%s\\t%s\\t%s\\n\", $2, $3, $4, $5, $6}'"
+            )
+            mount_output = stdout.read().decode().strip()
+
+            def _fmt(b):
+                if b >= 1024 ** 4: return f"{round(b / 1024 ** 4, 1)}T"
+                if b >= 1024 ** 3: return f"{round(b / 1024 ** 3, 1)}G"
+                if b >= 1024 ** 2: return f"{round(b / 1024 ** 2, 1)}M"
+                return f"{b}B"
+
+            for line in mount_output.split('\n'):
+                if not line.strip():
+                    continue
+                parts = line.split('\t')
+                if len(parts) < 5:
+                    continue
+                try:
+                    size_b, used_b, avail_b = int(parts[0]), int(parts[1]), int(parts[2])
+                    pct = round(float(parts[3]), 1)
+                    mp = parts[4].strip()
+                    mounts.append({
+                        'mountpoint': mp,
+                        'size': _fmt(size_b),
+                        'used': _fmt(used_b),
+                        'available': _fmt(avail_b),
+                        'percent': pct,
+                    })
+                except (ValueError, IndexError):
+                    continue
+
         ssh.close()
 
         return {
@@ -548,6 +584,7 @@ def get_server_stats(server_config, environment='default'):
             'storage_used': storage_used,
             'storage_available': storage_available,
             'storage_usage_percent': storage_usage_percent,
+            'mounts': mounts,
             'logs': html.escape(logs),
             'type': server_config['type'],
             'name': server_config['name'],
@@ -1014,7 +1051,7 @@ def admin_save():
         for sname, sdata in data.get('servers', {}).items():
             if sname not in config:
                 continue
-            for field in ['host', 'user', 'chart_label', 'chart_color', 'log_file', 'nginx_access_file', 'port', 'database']:
+            for field in ['host', 'user', 'chart_label', 'chart_color', 'log_file', 'nginx_access_file', 'port', 'database', 'show_mounts']:
                 if field in sdata:
                     config[sname][field] = str(sdata[field])
             if sdata.get('password', '').strip():

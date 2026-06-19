@@ -80,6 +80,9 @@ password =
 log_file =
 ; nginx_access_file: optional — enables the HTTP Requests chart
 nginx_access_file =
+; show_mounts: set to 0 to hide the mounted volumes section (partitions other than /).
+; Default is 1 (visible). Excluded from collection: tmpfs, devtmpfs, squashfs.
+show_mounts = 1
 chart_label =
 chart_color = #3b82f6
 
@@ -89,6 +92,7 @@ name =
 host =
 user =
 password =
+show_mounts = 1
 chart_label =
 chart_color = #10b981
 

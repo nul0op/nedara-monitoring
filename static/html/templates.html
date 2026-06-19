@@ -47,7 +47,7 @@
             </div>
             <div class="metric-bar-row">
                 <div class="metric-bar-header">
-                    <span class="metric-label">Disk</span>
+                    <span class="metric-label">Disk /</span>
                     <span class="metric-value-sm {{storage_value_class}}">{{storage_usage_percent}}%</span>
                 </div>
                 <div class="progress-bar">
@@ -55,6 +55,25 @@
                 </div>
                 <div class="metric-detail">{{storage_used}} / {{storage_size}} — {{storage_available}} free</div>
             </div>
+            {{#if mounts.length}}
+            <div class="mounts-section">
+                <div class="mounts-header">
+                    <span class="metric-label">Volumes</span>
+                </div>
+                {{#mounts}}
+                <div class="mount-item">
+                    <div class="metric-bar-header">
+                        <span class="mount-point" title="{{mountpoint}}">{{mountpoint}}</span>
+                        <span class="metric-value-sm {{percent_value_class}}">{{percent}}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-value {{percent_usage_class}}" style="width:{{percent}}%"></div>
+                    </div>
+                    <div class="metric-detail">{{used}} / {{size}} — {{available}} free</div>
+                </div>
+                {{/mounts}}
+            </div>
+            {{/if}}
         </div>
     </template>
 
